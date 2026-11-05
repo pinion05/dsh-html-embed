@@ -367,7 +367,7 @@ window.__ModuleLoader__.load({
 			".htmbed-title{font-weight:500;color:var(--dsw-alias-label-secondary);white-space:nowrap;flex:none;overflow:hidden;text-overflow:ellipsis;max-width:40%}",
 			".htmbed-path{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;opacity:.8}",
 			".htmbed-status{color:var(--dsw-alias-label-tertiary);flex:none}",
-			".htmbed-truncated{color:var(--dsw-alias-state-warn-primary);flex:none}",
+			".htmbed-truncated{color:var(--dsw-alias-state-warn-primary);flex:none;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
 			".htmbed-toggle{background:0 0;border:0;border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-tertiary);cursor:pointer;font:inherit;padding:2px 6px;flex:none;display:inline-flex;align-items:center}",
 			".htmbed-toggle:hover:not(:disabled){color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}",
 			".htmbed-toggle:disabled{opacity:.5;cursor:default}",
@@ -424,7 +424,17 @@ window.__ModuleLoader__.load({
 					locale: NS,
 					inject: (sessionId) => ({
 						sessionId: sessionId ?? null,
-						readBytes: (id, path, options, signal) => ctx.remote.workspaceFiles.readBytes(id, path, options, signal)
+						readBytes: (id, path, options, signal) => {
+							try {
+								const face = ctx.remote?.workspaceFiles;
+								if (face === void 0 || typeof face.readBytes !== "function") {
+									return Promise.resolve({ ok: false, error: { code: "remote.workspaceFiles unavailable" } });
+								}
+								return Promise.resolve(face.readBytes(id, path, options, signal));
+							} catch (cause) {
+								return Promise.resolve({ ok: false, error: { code: String(cause !== null && typeof cause === "object" && "message" in cause ? cause.message : cause) } });
+							}
+						}
 					})
 				}, HtmlPreviewNodeView));
 			}
