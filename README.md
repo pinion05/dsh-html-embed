@@ -19,6 +19,7 @@ Chat UIs escape-code HTML into a wall of `&lt;div&gt;`. When an agent answers wi
 - **Sandboxed by default** — frames render with `sandbox=""`: scripts blocked, opaque origin, no access to the app's DOM, storage, or session data
 - **Multi-block** — several HTML blocks in one message become separate cards (up to `maxBlocks`)
 - **Collapsible cards** — per-card collapse/expand, remembered across list virtualization
+- **Live-resizable** — drag any card's bottom edge to resize in real time (the frame keeps running — no reload); double-click resets, arrow keys nudge. Per-card heights stick while the page is open
 - **Card titles** — ` ```html title="Dashboard" ` (or any trailing info-string text) is shown in the card header
 - **Theme-aware chrome** — header and controls use the host's `--dsw-alias-*` design tokens; the frame content stays yours
 - **Localized UI** — English, 한국어, 中文
@@ -57,7 +58,7 @@ window.__DSH_HTML_EMBED_CONFIG__ = {
 | `langs` | `string[]` | `["html", "htm"]` | Fence info-string languages that trigger a preview (case-insensitive, leading `.` ignored) |
 | `maxBlocks` | `number` | `4` | Maximum preview cards rendered per assistant message |
 | `maxFiles` | `number` | `3` | Maximum workspace-file cards rendered per assistant message |
-| `height` | `number` | `280` | Card frame height in pixels |
+| `height` | `number` | `280` | **Default** card frame height in pixels — cards are user-resizable afterwards |
 | `allowScripts` | `boolean` | `false` | Allow scripts inside the sandboxed frame — see [Security](#security) |
 | `collapsed` | `boolean` | `false` | Render cards collapsed until expanded |
 

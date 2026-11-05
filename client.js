@@ -20,7 +20,7 @@ window.__ModuleLoader__.load({
 	id: "@local/html-embed",
 	factory(require) {
 		const React = require("react");
-		const { createElement: h, memo, useState, useEffect } = React;
+		const { createElement: h, memo, useState, useEffect, useRef } = React;
 
 		const NS = "html-embed";
 		const KIND = "html-preview";
@@ -224,8 +224,91 @@ window.__ModuleLoader__.load({
 
 		/** Per-node collapse memory that survives virtualization remounts. */
 		const collapseMemory = new Map();
+		/** Per-card frame heights in px; also survives virtualization remounts (in-page only). */
+		const heightMemory = new Map();
 		/** Decoded file bodies keyed by `sessionId\0path`; survives virtualization remounts. */
 		const FILE_CACHE = new Map();
+
+		const HEIGHT_MIN = 120;
+		const HEIGHT_MAX = 2000;
+		function clampHeight(px) {
+			const value = Number(px);
+			return Math.max(HEIGHT_MIN, Math.min(HEIGHT_MAX, Math.round(Number.isFinite(value) ? value : OPTIONS.height)));
+		}
+
+		/** Drag-to-resize height for one preview card; double-click resets, arrow keys nudge. */
+		function useCardHeight(stateKey) {
+			const [height, setHeight] = useState(heightMemory.get(stateKey) ?? OPTIONS.height);
+			const [dragging, setDragging] = useState(false);
+			const dragRef = useRef(null);
+			const apply = (next) => {
+				heightMemory.set(stateKey, next);
+				setHeight(next);
+			};
+			const reset = () => {
+				heightMemory.delete(stateKey);
+				setHeight(OPTIONS.height);
+			};
+			const onPointerDown = (event) => {
+				if (event.button !== 0) return;
+				event.preventDefault();
+				try {
+					event.currentTarget.setPointerCapture(event.pointerId);
+				} catch {}
+				dragRef.current = { startY: event.clientY, startHeight: heightMemory.get(stateKey) ?? OPTIONS.height };
+				document.body.style.userSelect = "none";
+				setDragging(true);
+			};
+			const onPointerMove = (event) => {
+				const drag = dragRef.current;
+				if (drag === null) return;
+				apply(clampHeight(drag.startHeight + (event.clientY - drag.startY)));
+			};
+			const endDrag = (event) => {
+				if (dragRef.current === null) return;
+				dragRef.current = null;
+				document.body.style.userSelect = "";
+				setDragging(false);
+				try {
+					if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+				} catch {}
+			};
+			const onKeyDown = (event) => {
+				if (event.key === "ArrowUp" || event.key === "ArrowRight") {
+					event.preventDefault();
+					apply(clampHeight((heightMemory.get(stateKey) ?? OPTIONS.height) + (event.shiftKey ? 64 : 16)));
+				} else if (event.key === "ArrowDown" || event.key === "ArrowLeft") {
+					event.preventDefault();
+					apply(clampHeight((heightMemory.get(stateKey) ?? OPTIONS.height) - (event.shiftKey ? 64 : 16)));
+				} else if (event.key === "Enter" || event.key === "Escape") {
+					event.preventDefault();
+					reset();
+				}
+			};
+			const handleProps = {
+				role: "slider",
+				tabIndex: 0,
+				"aria-orientation": "horizontal",
+				"aria-valuemin": HEIGHT_MIN,
+				"aria-valuemax": HEIGHT_MAX,
+				"aria-valuenow": height,
+				"aria-valuetext": `${height}px`,
+				onPointerDown,
+				onPointerMove,
+				onPointerUp: endDrag,
+				onPointerCancel: endDrag,
+				onKeyDown,
+				onDoubleClick: reset
+			};
+			return { height, dragging, handleProps, reset };
+		}
+
+		function ResizeHandle({ frame, t }) {
+			return h("div", { className: "htmbed-resize", ...frame.handleProps, "aria-label": t("resize") },
+				h("div", { className: "htmbed-grip" }),
+				frame.dragging ? h("div", { className: "htmbed-size" }, `${frame.height}px`) : null
+			);
+		}
 
 		function useCollapse(initial) {
 			const [collapsed, setCollapsed] = useState(collapseMemory.get(initial.stateKey) ?? initial.defaultCollapsed);
@@ -242,6 +325,7 @@ window.__ModuleLoader__.load({
 
 		function HtmlPreviewCard({ item, stateKey, t }) {
 			const [collapsed, toggle] = useCollapse({ stateKey, defaultCollapsed: OPTIONS.collapsed });
+			const frame = useCardHeight(stateKey);
 			return h("div", { className: "htmbed-card" },
 				h("div", { className: "htmbed-header" },
 					h("span", { className: "htmbed-lang" }, item.lang.toUpperCase()),
@@ -254,14 +338,17 @@ window.__ModuleLoader__.load({
 						"aria-expanded": String(!collapsed)
 					}, t(collapsed ? "expand" : "collapse"))
 				),
-				collapsed ? null : h("iframe", {
-					className: "htmbed-frame",
-					srcDoc: item.html,
-					sandbox: OPTIONS.allowScripts ? "allow-scripts" : "",
-					title: t("frame"),
-					loading: "lazy",
-					style: { height: `${OPTIONS.height}px` }
-				})
+				collapsed ? null : h(React.Fragment, null,
+					h("iframe", {
+						className: "htmbed-frame",
+						srcDoc: item.html,
+						sandbox: OPTIONS.allowScripts ? "allow-scripts" : "",
+						title: t("frame"),
+						loading: "lazy",
+						style: { height: `${frame.height}px` }
+					}),
+					h(ResizeHandle, { frame, t })
+				)
 			);
 		}
 
@@ -303,6 +390,7 @@ window.__ModuleLoader__.load({
 				};
 			}, [cacheKey]);
 			const basename = file.path.split("/").at(-1) || file.path;
+			const frame = useCardHeight(stateKey);
 			return h("div", { className: "htmbed-card", "data-html-embed-file": file.path },
 				h("div", { className: "htmbed-header" },
 					h("span", { className: "htmbed-lang" }, "HTML"),
@@ -319,14 +407,17 @@ window.__ModuleLoader__.load({
 						"aria-expanded": String(!collapsed)
 					}, t(collapsed ? "expand" : "collapse"))
 				),
-				state.status !== "ready" || collapsed ? null : h("iframe", {
-					className: "htmbed-frame",
-					srcDoc: state.html,
-					sandbox: OPTIONS.allowScripts ? "allow-scripts" : "",
-					title: t("fileFrame", { path: basename }),
-					loading: "lazy",
-					style: { height: `${OPTIONS.height}px` }
-				})
+				state.status !== "ready" || collapsed ? null : h(React.Fragment, null,
+					h("iframe", {
+						className: "htmbed-frame",
+						srcDoc: state.html,
+						sandbox: OPTIONS.allowScripts ? "allow-scripts" : "",
+						title: t("fileFrame", { path: basename }),
+						loading: "lazy",
+						style: { height: `${frame.height}px` }
+					}),
+					h(ResizeHandle, { frame, t })
+				)
 			);
 		}
 
@@ -372,7 +463,13 @@ window.__ModuleLoader__.load({
 			".htmbed-toggle:hover:not(:disabled){color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}",
 			".htmbed-toggle:disabled{opacity:.5;cursor:default}",
 			".htmbed-toggle:focus-visible{outline:1.5px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}",
-			".htmbed-frame{display:block;width:100%;border:0;background:#fff;color-scheme:light}"
+			".htmbed-frame{display:block;width:100%;border:0;background:#fff;color-scheme:light}",
+			".htmbed-resize{position:relative;height:10px;cursor:ns-resize;touch-action:none;align-items:center;justify-content:center;display:flex;border-top:.5px solid var(--dsw-alias-border-l1);background:0 0}",
+			".htmbed-resize:hover{background:var(--dsw-alias-interactive-bg-hover)}",
+			".htmbed-resize:focus-visible{outline:1.5px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:-2px}",
+			".htmbed-grip{width:36px;height:3px;border-radius:2px;background:var(--dsw-alias-label-caption);flex:none;transition:background .1s}",
+			".htmbed-resize:hover .htmbed-grip{background:var(--dsw-alias-label-tertiary)}",
+			".htmbed-size{position:absolute;right:8px;top:-24px;padding:1px 7px;border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-base);border:.5px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);pointer-events:none;white-space:nowrap}"
 		].join("\n");
 
 		const DICTS = {
@@ -383,7 +480,8 @@ window.__ModuleLoader__.load({
 				frame: "Embedded HTML preview",
 				fileFrame: "Preview of {path}",
 				loading: "Loading…",
-				loadFailed: "Failed to load"
+				loadFailed: "Failed to load",
+				resize: "Drag to resize preview height (arrow keys adjust, double-click resets)"
 			},
 			ko: {
 				truncated: "미리보기 일부 생략됨",
@@ -392,7 +490,8 @@ window.__ModuleLoader__.load({
 				frame: "임베디드 HTML 미리보기",
 				fileFrame: "{path} 미리보기",
 				loading: "불러오는 중…",
-				loadFailed: "파일 로드 실패"
+				loadFailed: "파일 로드 실패",
+				resize: "드래그로 미리보기 높이 조절 (방향키 조정, 더블클릭 초기화)"
 			},
 			zh: {
 				truncated: "预览已截断",
@@ -401,7 +500,8 @@ window.__ModuleLoader__.load({
 				frame: "内嵌 HTML 预览",
 				fileFrame: "{path} 预览",
 				loading: "加载中…",
-				loadFailed: "文件加载失败"
+				loadFailed: "文件加载失败",
+				resize: "拖拽调整预览高度（方向键微调，双击重置）"
 			}
 		};
 
