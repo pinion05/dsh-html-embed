@@ -381,7 +381,7 @@ window.__ModuleLoader__.load({
 				collapse: "Collapse",
 				expand: "Expand",
 				frame: "Embedded HTML preview",
-				fileFrame: (input) => `Preview of ${input.path}`,
+				fileFrame: "Preview of {path}",
 				loading: "Loading…",
 				loadFailed: "Failed to load"
 			},
@@ -390,7 +390,7 @@ window.__ModuleLoader__.load({
 				collapse: "접기",
 				expand: "펼치기",
 				frame: "임베디드 HTML 미리보기",
-				fileFrame: (input) => `${input.path} 미리보기`,
+				fileFrame: "{path} 미리보기",
 				loading: "불러오는 중…",
 				loadFailed: "파일 로드 실패"
 			},
@@ -399,7 +399,7 @@ window.__ModuleLoader__.load({
 				collapse: "折叠",
 				expand: "展开",
 				frame: "内嵌 HTML 预览",
-				fileFrame: (input) => `${input.path} 预览`,
+				fileFrame: "{path} 预览",
 				loading: "加载中…",
 				loadFailed: "文件加载失败"
 			}
