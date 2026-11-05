@@ -309,7 +309,7 @@ window.__ModuleLoader__.load({
 					h("span", { className: "htmbed-title", title: file.path }, basename),
 					h("span", { className: "htmbed-path" }, file.path),
 					state.status === "loading" ? h("span", { className: "htmbed-status" }, t("loading")) : null,
-					state.status === "error" ? h("span", { className: "htmbed-truncated", title: state.error }, t("loadFailed")) : null,
+					state.status === "error" ? h("span", { className: "htmbed-truncated", title: state.error }, `${t("loadFailed")}${state.error ? ` (${state.error})` : ""}`) : null,
 					state.status === "ready" && state.truncated ? h("span", { className: "htmbed-truncated" }, t("truncated")) : null,
 					h("button", {
 						type: "button",
@@ -406,7 +406,7 @@ window.__ModuleLoader__.load({
 		};
 
 		return {
-			inject: ["uiConversation", "slots", "locale", "remote"],
+			inject: ["uiConversation", "slots", "locale", "remote", "remote.workspaceFiles"],
 			apply(ctx) {
 				ctx.effect(() => ctx.locale.register(NS, DICTS), `${NS}: dictionaries`);
 				ctx.effect(() => {
