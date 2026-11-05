@@ -1,6 +1,6 @@
 {
   "name": "@local/html-embed",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Renders HTML code blocks from assistant messages as live sandboxed previews directly in the chat",
@@ -46,7 +46,11 @@
     "client": {
       "platform": "web",
       "immediately": true,
-      "inject": ["@deepseek-ai/dsh-client-ui-chat"]
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-api-workspace-files"
+      ]
     }
   }
 }

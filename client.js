@@ -2,12 +2,17 @@
  * @local/html-embed — Client half.
  *
  * Registers one Conversation event Definition ("html-preview") that folds
- * finalized `assistant/message` events, extracts fenced ```html code blocks,
- * and publishes a Chat node anchored right after the assistant message; plus
- * the matching keyed `conversation.chat.node` renderer that draws each block
- * as a sandboxed iframe preview card inside the chat flow.
+ * finalized `assistant/message` events and publishes a Chat node anchored
+ * right after the assistant message, plus the matching keyed
+ * `conversation.chat.node` renderer. The node carries two kinds of preview
+ * sources extracted from the message text:
  *
- * Security follows the shipped Sidebar document preview: the iframe renders
+ *   1. Fenced ```html / ```htm code blocks → inline srcDoc previews.
+ *   2. Referenced `.html` / `.htm` workspace files (backticked paths or
+ *      markdown links) → live cards that load the bytes through the
+ *      session-authorized `ctx.remote.workspaceFiles.readBytes` RPC.
+ *
+ * Security follows the shipped Sidebar document preview: every iframe renders
  * with an empty sandbox token (scripts blocked, opaque origin) unless the
  * deployment explicitly enables `allowScripts` through the page override.
  */
@@ -15,7 +20,7 @@ window.__ModuleLoader__.load({
 	id: "@local/html-embed",
 	factory(require) {
 		const React = require("react");
-		const { createElement: h, memo, useState } = React;
+		const { createElement: h, memo, useState, useEffect } = React;
 
 		const NS = "html-embed";
 		const KIND = "html-preview";
@@ -28,6 +33,8 @@ window.__ModuleLoader__.load({
 			langs: ["html", "htm"],
 			/** Maximum preview cards per assistant message. */
 			maxBlocks: 4,
+			/** Maximum file preview cards per assistant message. */
+			maxFiles: 3,
 			/** Default iframe height in px. */
 			height: 280,
 			/** Run scripts inside the sandbox (still opaque-origin, no host access). */
@@ -46,6 +53,8 @@ window.__ModuleLoader__.load({
 			merged.height = Number.isFinite(height) && height >= 80 && height <= 2000 ? Math.round(height) : DEFAULTS.height;
 			const maxBlocks = Number(merged.maxBlocks);
 			merged.maxBlocks = Number.isFinite(maxBlocks) && maxBlocks >= 1 && maxBlocks <= 20 ? Math.round(maxBlocks) : DEFAULTS.maxBlocks;
+			const maxFiles = Number(merged.maxFiles);
+			merged.maxFiles = Number.isFinite(maxFiles) && maxFiles >= 1 && maxFiles <= 10 ? Math.round(maxFiles) : DEFAULTS.maxFiles;
 			merged.allowScripts = merged.allowScripts === true;
 			merged.collapsed = merged.collapsed === true;
 			return merged;
@@ -121,6 +130,34 @@ window.__ModuleLoader__.load({
 			return out;
 		}
 
+		/** Path-like token that may name an HTML file in the workspace. */
+		const BACKTICKED_PATH = /`([^`\n]+?\.(?:html?))`/gi;
+		const MD_LINK_PATH = /\[[^\]\n]*\]\(\s*([^)\s]+?\.(?:html?))(?:\s+"[^"]*")?\s*\)/gi;
+		const BARE_PATH = /(?<![\w"'`=@#%~/.-])(?:\.{1,2}\/)?[\w@~+.-]+(?:\/[\w@~+.-]+)*\.(?:html|htm)(?![\w.])/gi;
+		const NON_FILE_PATH = /^(?:[a-z][a-z\d+.-]*:|\/\/)/;
+
+		/** Normalize, dedupe, and cap HTML file paths mentioned in one message. */
+		function extractHtmlFilePaths(markdown) {
+			const text = String(markdown);
+			const found = [];
+			const seen = new Set();
+			const accept = (raw) => {
+				if (typeof raw !== "string") return;
+				const candidate = raw.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "").trim();
+				if (candidate.length === 0 || candidate.length > 512) return;
+				if (NON_FILE_PATH.test(candidate)) return;
+				if (!/\.(?:html|htm)$/i.test(candidate)) return;
+				const key = candidate.toLowerCase();
+				if (seen.has(key)) return;
+				seen.add(key);
+				found.push(candidate);
+			};
+			for (const match of text.matchAll(BACKTICKED_PATH)) accept(match[1]);
+			for (const match of text.matchAll(MD_LINK_PATH)) accept(match[1]);
+			for (const match of text.matchAll(BARE_PATH)) accept(match[0]);
+			return found.slice(0, OPTIONS.maxFiles).map((path) => ({ path }));
+		}
+
 		/** Latest assistant/message facts for one Turn/Step. */
 		function messageState(event) {
 			const data = event.data ?? {};
@@ -160,7 +197,8 @@ window.__ModuleLoader__.load({
 				}
 				if (state === void 0 || state === null) return null;
 				const items = extractHtmlBlocks(state.text);
-				if (items.length === 0) return null;
+				const files = extractHtmlFilePaths(state.text);
+				if (items.length === 0 && files.length === 0) return null;
 				const location = context.start?.location ?? context.matches[0]?.location ?? { kind: "unresolved" };
 				return {
 					key: context.key,
@@ -177,7 +215,8 @@ window.__ModuleLoader__.load({
 						turn: state.turn,
 						step: state.step,
 						messageId: state.messageId,
-						items
+						items,
+						files
 					}
 				};
 			}
@@ -185,17 +224,24 @@ window.__ModuleLoader__.load({
 
 		/** Per-node collapse memory that survives virtualization remounts. */
 		const collapseMemory = new Map();
+		/** Decoded file bodies keyed by `sessionId\0path`; survives virtualization remounts. */
+		const FILE_CACHE = new Map();
 
-		function HtmlPreviewCard({ item, stateKey, t }) {
-			const [collapsed, setCollapsed] = useState(collapseMemory.get(stateKey) ?? OPTIONS.collapsed);
+		function useCollapse(initial) {
+			const [collapsed, setCollapsed] = useState(collapseMemory.get(initial.stateKey) ?? initial.defaultCollapsed);
 			const toggle = () => {
 				setCollapsed((current) => {
 					const next = !current;
-					if (next === OPTIONS.collapsed) collapseMemory.delete(stateKey);
-					else collapseMemory.set(stateKey, next);
+					if (next === initial.defaultCollapsed) collapseMemory.delete(initial.stateKey);
+					else collapseMemory.set(initial.stateKey, next);
 					return next;
 				});
 			};
+			return [collapsed, toggle];
+		}
+
+		function HtmlPreviewCard({ item, stateKey, t }) {
+			const [collapsed, toggle] = useCollapse({ stateKey, defaultCollapsed: OPTIONS.collapsed });
 			return h("div", { className: "htmbed-card" },
 				h("div", { className: "htmbed-header" },
 					h("span", { className: "htmbed-lang" }, item.lang.toUpperCase()),
@@ -219,19 +265,98 @@ window.__ModuleLoader__.load({
 			);
 		}
 
-		const HtmlPreviewNodeView = memo(function HtmlPreviewNodeView({ node, t }) {
+		function HtmlFileCard({ file, sessionId, readBytes, stateKey, t }) {
+			const cacheKey = `${sessionId ?? ""}\u0000${file.path}`;
+			const cached = FILE_CACHE.get(cacheKey);
+			const [collapsed, toggle] = useCollapse({ stateKey, defaultCollapsed: OPTIONS.collapsed });
+			const [state, setState] = useState(cached ?? { status: "loading", html: "", truncated: false, error: "" });
+			useEffect(() => {
+				if (cached !== undefined) return;
+				let alive = true;
+				const controller = typeof AbortController === "function" ? new AbortController() : null;
+				Promise.resolve()
+					.then(() => readBytes(sessionId, file.path, {}, controller ? controller.signal : undefined))
+					.then((result) => {
+						if (!alive) return;
+						const value = result !== null && typeof result === "object" && result.ok === true ? result.value : null;
+						if (value !== null && value.data != null) {
+							const html = typeof value.data === "string" ? value.data : new TextDecoder().decode(value.data);
+							const next = { status: "ready", html, truncated: value.eof === false, error: "" };
+							FILE_CACHE.set(cacheKey, next);
+							setState(next);
+							return;
+						}
+						const code = result !== null && typeof result === "object" && result.error && result.error.code ? String(result.error.code) : "error";
+						const next = { status: "error", html: "", truncated: false, error: code };
+						FILE_CACHE.set(cacheKey, next);
+						setState(next);
+					})
+					.catch(() => {
+						if (!alive) return;
+						const next = { status: "error", html: "", truncated: false, error: "failed" };
+						FILE_CACHE.set(cacheKey, next);
+						setState(next);
+					});
+				return () => {
+					alive = false;
+					if (controller !== null) controller.abort();
+				};
+			}, [cacheKey]);
+			const basename = file.path.split("/").at(-1) || file.path;
+			return h("div", { className: "htmbed-card", "data-html-embed-file": file.path },
+				h("div", { className: "htmbed-header" },
+					h("span", { className: "htmbed-lang" }, "HTML"),
+					h("span", { className: "htmbed-title", title: file.path }, basename),
+					h("span", { className: "htmbed-path" }, file.path),
+					state.status === "loading" ? h("span", { className: "htmbed-status" }, t("loading")) : null,
+					state.status === "error" ? h("span", { className: "htmbed-truncated", title: state.error }, t("loadFailed")) : null,
+					state.status === "ready" && state.truncated ? h("span", { className: "htmbed-truncated" }, t("truncated")) : null,
+					h("button", {
+						type: "button",
+						className: "htmbed-toggle",
+						onClick: toggle,
+						disabled: state.status !== "ready",
+						"aria-expanded": String(!collapsed)
+					}, t(collapsed ? "expand" : "collapse"))
+				),
+				state.status !== "ready" || collapsed ? null : h("iframe", {
+					className: "htmbed-frame",
+					srcDoc: state.html,
+					sandbox: OPTIONS.allowScripts ? "allow-scripts" : "",
+					title: t("fileFrame", { path: basename }),
+					loading: "lazy",
+					style: { height: `${OPTIONS.height}px` }
+				})
+			);
+		}
+
+		const HtmlPreviewNodeView = memo(function HtmlPreviewNodeView({ node, sessionId, readBytes, t }) {
 			const data = node?.data;
 			const items = data?.items;
-			if (!Array.isArray(items) || items.length === 0) return null;
+			const files = data?.files;
+			const hasItems = Array.isArray(items) && items.length > 0;
+			const hasFiles = Array.isArray(files) && files.length > 0;
+			if (!hasItems && !hasFiles) return null;
+			const base = String(data.messageId ?? data.seq ?? "");
 			return h("div", {
 				className: "htmbed-row",
-				"data-html-embed": String(data.messageId ?? data.seq ?? "")
-			}, items.map((item, index) => h(HtmlPreviewCard, {
-				key: `${data.messageId ?? data.seq}:${index}`,
-				item,
-				stateKey: `${data.messageId ?? data.seq}:${index}`,
-				t
-			})));
+				"data-html-embed": base
+			},
+				hasItems ? items.map((item, index) => h(HtmlPreviewCard, {
+					key: `b:${base}:${index}`,
+					item,
+					stateKey: `b:${base}:${index}`,
+					t
+				})) : null,
+				hasFiles ? files.map((file, index) => h(HtmlFileCard, {
+					key: `f:${base}:${file.path}`,
+					file,
+					sessionId,
+					readBytes,
+					stateKey: `f:${base}:${file.path}`,
+					t
+				})) : null
+			);
 		});
 
 		const CSS = [
@@ -239,10 +364,13 @@ window.__ModuleLoader__.load({
 			".htmbed-card{border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-base);overflow:hidden;min-width:0}",
 			".htmbed-header{align-items:center;gap:8px;min-height:30px;padding:3px 8px 3px 12px;color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-xxs-12);background:var(--dsw-alias-markdown-code-block);border-bottom:.5px solid var(--dsw-alias-border-l1);display:flex}",
 			".htmbed-lang{font-weight:600;letter-spacing:.05em;color:var(--dsw-alias-label-secondary);flex:none}",
-			".htmbed-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}",
+			".htmbed-title{font-weight:500;color:var(--dsw-alias-label-secondary);white-space:nowrap;flex:none;overflow:hidden;text-overflow:ellipsis;max-width:40%}",
+			".htmbed-path{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;opacity:.8}",
+			".htmbed-status{color:var(--dsw-alias-label-tertiary);flex:none}",
 			".htmbed-truncated{color:var(--dsw-alias-state-warn-primary);flex:none}",
 			".htmbed-toggle{background:0 0;border:0;border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-tertiary);cursor:pointer;font:inherit;padding:2px 6px;flex:none;display:inline-flex;align-items:center}",
-			".htmbed-toggle:hover{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}",
+			".htmbed-toggle:hover:not(:disabled){color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}",
+			".htmbed-toggle:disabled{opacity:.5;cursor:default}",
 			".htmbed-toggle:focus-visible{outline:1.5px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}",
 			".htmbed-frame{display:block;width:100%;border:0;background:#fff;color-scheme:light}"
 		].join("\n");
@@ -252,24 +380,33 @@ window.__ModuleLoader__.load({
 				truncated: "Preview truncated",
 				collapse: "Collapse",
 				expand: "Expand",
-				frame: "Embedded HTML preview"
+				frame: "Embedded HTML preview",
+				fileFrame: (input) => `Preview of ${input.path}`,
+				loading: "Loading…",
+				loadFailed: "Failed to load"
 			},
 			ko: {
 				truncated: "미리보기 일부 생략됨",
 				collapse: "접기",
 				expand: "펼치기",
-				frame: "임베디드 HTML 미리보기"
+				frame: "임베디드 HTML 미리보기",
+				fileFrame: (input) => `${input.path} 미리보기`,
+				loading: "불러오는 중…",
+				loadFailed: "파일 로드 실패"
 			},
 			zh: {
 				truncated: "预览已截断",
 				collapse: "折叠",
 				expand: "展开",
-				frame: "内嵌 HTML 预览"
+				frame: "内嵌 HTML 预览",
+				fileFrame: (input) => `${input.path} 预览`,
+				loading: "加载中…",
+				loadFailed: "文件加载失败"
 			}
 		};
 
 		return {
-			inject: ["uiConversation", "slots", "locale"],
+			inject: ["uiConversation", "slots", "locale", "remote"],
 			apply(ctx) {
 				ctx.effect(() => ctx.locale.register(NS, DICTS), `${NS}: dictionaries`);
 				ctx.effect(() => {
@@ -284,7 +421,11 @@ window.__ModuleLoader__.load({
 				ctx.slots.inject("conversation.chat.node", () => ctx.slots.register({
 					name: "conversation.chat.node",
 					key: KIND,
-					locale: NS
+					locale: NS,
+					inject: (sessionId) => ({
+						sessionId: sessionId ?? null,
+						readBytes: (id, path, options, signal) => ctx.remote.workspaceFiles.readBytes(id, path, options, signal)
+					})
 				}, HtmlPreviewNodeView));
 			}
 		};
