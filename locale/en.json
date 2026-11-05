@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "HTML Embed",
+    "description": "Renders HTML code blocks from assistant messages as live sandboxed previews directly in the chat."
+  }
+}

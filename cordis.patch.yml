@@ -1,0 +1,3 @@
+- insert:
+    - id: html-embed
+      name: '@local/html-embed'
