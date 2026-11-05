@@ -22,25 +22,7 @@ Chat UIs escape-code HTML into a wall of `&lt;div&gt;`. When an agent answers wi
 - **Theme-aware chrome** — header and controls use the host's `--dsw-alias-*` design tokens; the frame content stays yours
 - **Localized UI** — English, 한국어, 中文
 
-## Getting started
-
-### Prerequisites
-
-A [DeepSeek Harness](https://github.com/deepseek-ai) (DSH) deployment with the Web GUI and Cordis bundle support. The plugin is a client-side bundle; it needs no Host services and no build step.
-
-### Install
-
-```bash
-git clone https://github.com/pinion05/dsh-html-embed.git
-```
-
-The repository root is a standard Cordis bundle package (`package.json` declares `dsh.bundle.patch`). Install it into your profile with DSH's plugin manager — the package directory is the install target. Easiest path: ask your DSH agent
-
-> Install the bundle at `<clone path>` into this profile.
-
-then reload the Web GUI page. The plugin appears in the bundle list as **HTML Embed** and activates immediately.
-
-### Use it
+## Usage
 
 Ask your agent for HTML, e.g. *"Show me a ```html demo card with a gradient banner"*. Any fenced block whose info string starts with `html`/`htm` renders under the reply:
 
